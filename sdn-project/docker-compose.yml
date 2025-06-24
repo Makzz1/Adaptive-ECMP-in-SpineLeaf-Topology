@@ -1,0 +1,33 @@
+version: "3.9"
+
+services:
+  ryu:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.ryu
+    container_name: ryu
+    networks:
+      sdn_net:
+        ipv4_address: 172.31.0.2
+
+  mininet:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.mininet
+    container_name: mininet
+    privileged: true
+    networks:
+      sdn_net:
+        ipv4_address: 172.31.0.3
+    volumes:
+      - ./topology/spine_leaf_topology.py:/opt/topo/spine_leaf_topology.py:ro
+    tty: true
+    stdin_open: true
+
+
+networks:
+  sdn_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.31.0.0/24

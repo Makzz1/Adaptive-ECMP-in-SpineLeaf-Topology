@@ -1,0 +1,20 @@
+# docker/Dockerfile.ryu
+FROM python:3.8-slim
+
+RUN apt-get update && apt-get install -y \
+    git \
+    curl \
+    net-tools \
+    iputils-ping \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir ryu eventlet==0.30.2
+
+WORKDIR /app
+
+COPY ./controller /app
+
+EXPOSE 6633
+
+ENTRYPOINT ["ryu-manager", "--verbose", "--ofp-listen-host", "0.0.0.0", "ecmp_controller.py"]
