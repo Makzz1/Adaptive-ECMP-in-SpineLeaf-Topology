@@ -1,34 +1,53 @@
-#!/usr/bin/env python3
-
+# 2-by-2 leaf-spine topology
 from mininet.topo import Topo
+from mininet.net import Mininet
+from mininet.cli import CLI
+from mininet.node import RemoteController, Host
+from mininet.link import TCLink
+from mininet.log import setLogLevel
 
-class SpineLeaf(Topo):
-    def build(self):
-        # Spine switches
-        spine1 = self.addSwitch("s1", dpid="0000000000000001")
-        spine2 = self.addSwitch("s2", dpid="0000000000000002")
+class MyTopo(Topo):
 
-        # Leaf switches
-        leaf1 = self.addSwitch("l1", dpid="0000000000000003")
-        leaf2 = self.addSwitch("l2", dpid="0000000000000004")
+    spineswitch = []
+    leafswitch = []
+    host = []
 
-        # Hosts for leaf1
-        h1 = self.addHost("h1")
-        h2 = self.addHost("h2")
+    def __init__(self):
 
-        # Hosts for leaf2
-        h3 = self.addHost("h3")
-        h4 = self.addHost("h4")
+        # initialize topology
+        Topo.__init__(self)
 
-        # Connect hosts to leaves
-        self.addLink(h1, leaf1)
-        self.addLink(h2, leaf1)
-        self.addLink(h3, leaf2)
-        self.addLink(h4, leaf2)
+        for i in range(1, 3):
+            # add spine switches
+            self.spineswitch.append(self.addSwitch("10"+str(i), dpid="000000000000010"+str(i)))
 
-        # Full-mesh links between leaves and spines
-        for leaf in (leaf1, leaf2):
-            for spine in (spine1, spine2):
-                self.addLink(leaf, spine)
+            # add leaf switches
+            self.leafswitch.append(self.addSwitch("20"+str(i), dpid="000000000000020"+str(i)))
 
-topos = {'spine_leaf': (lambda: SpineLeaf())}
+        # add hosts
+        self.host.append(self.addHost("301", mac="00:00:00:00:00:01", ip="10.0.0.1/24"))
+        self.host.append(self.addHost("302", mac="00:00:00:00:00:02", ip="10.0.0.2/24"))
+        self.host.append(self.addHost("303", mac="00:00:00:00:00:03", ip="10.0.0.3/24"))
+        self.host.append(self.addHost("304", mac="00:00:00:00:00:04", ip="10.0.0.4/24"))
+
+        # add links
+        for i in range(2):
+            self.addLink(self.spineswitch[i], self.leafswitch[0], 1, i+1)
+            self.addLink(self.spineswitch[i], self.leafswitch[1], 2, i+1)
+
+        for i in range(2):
+            self.addLink(self.leafswitch[i], self.host[i*2], 3)
+            self.addLink(self.leafswitch[i], self.host[i*2+1], 4)
+
+topos = {'mytopo': (lambda: MyTopo())}
+
+if __name__ == "__main__":
+    setLogLevel('info')
+
+    topo = MyTopo()
+    net = Mininet(topo=topo, link=TCLink, controller=None)
+    net.addController('c0', controller=RemoteController, ip='127.0.0.1')
+
+    net.start()
+    CLI(net)
+    net.stop()

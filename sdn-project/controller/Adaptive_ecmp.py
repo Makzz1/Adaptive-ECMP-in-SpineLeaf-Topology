@@ -74,55 +74,55 @@ class SimpleSwitch13(app_manager.RyuApp):
             self.group_mod_flag[dpid] = False
 
     def add_flow(self, datapath, hard_timeout, priority, match, actions, buffer_id=None):
-        # def add_flow(self, datapath, priority, match, actions, buffer_id=None):
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
 
-        inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS,
-                                             actions)]
+        # Apply actions (including group actions)
+        inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
+
         if buffer_id:
             mod = parser.OFPFlowMod(datapath=datapath, buffer_id=buffer_id,
-                                    priority=priority,
-                                    hard_timeout=hard_timeout,
+                                    priority=priority, hard_timeout=hard_timeout,
                                     match=match, instructions=inst)
         else:
-            mod = parser.OFPFlowMod(datapath=datapath, priority=priority,
-                                    hard_timeout=hard_timeout,
+            mod = parser.OFPFlowMod(datapath=datapath, priority=priority, hard_timeout=hard_timeout,
                                     match=match, instructions=inst)
 
         datapath.send_msg(mod)
 
     def send_group_mod(self, datapath):
         ofproto = datapath.ofproto
-        ofp_parser = datapath.ofproto_parser
+        parser = datapath.ofproto_parser
 
+        group_id = 50
         port_1 = 1
-        queue_1 = ofp_parser.OFPActionSetQueue(0)
-        actions_1 = [queue_1, ofp_parser.OFPActionOutput(port_1)]
-
         port_2 = 2
-        queue_2 = ofp_parser.OFPActionSetQueue(0)
-        actions_2 = [queue_2, ofp_parser.OFPActionOutput(port_2)]
+
+        actions_1 = [parser.OFPActionSetQueue(0), parser.OFPActionOutput(port_1)]
+        actions_2 = [parser.OFPActionSetQueue(0), parser.OFPActionOutput(port_2)]
 
         weight_1 = 50
         weight_2 = 50
 
-        watch_port = ofproto_v1_3.OFPP_ANY
-        watch_group = ofproto_v1_3.OFPQ_ALL
+        watch_port = ofproto.OFPP_ANY
+        watch_group = ofproto.OFPG_ANY
 
         buckets = [
-            ofp_parser.OFPBucket(weight_1, watch_port, watch_group, actions_1),
-            ofp_parser.OFPBucket(weight_2, watch_port, watch_group, actions_2)]
+            parser.OFPBucket(weight=weight_1, watch_port=watch_port,
+                             watch_group=watch_group, actions=actions_1),
+            parser.OFPBucket(weight=weight_2, watch_port=watch_port,
+                             watch_group=watch_group, actions=actions_2)
+        ]
 
-        group_id = 50
-        req = ofp_parser.OFPGroupMod(datapath, ofproto.OFPFC_ADD,
-                                     ofproto.OFPGT_SELECT, group_id, buckets)
-
+        req = parser.OFPGroupMod(datapath, ofproto.OFPFC_ADD,
+                                 ofproto.OFPGT_SELECT, group_id, buckets)
         datapath.send_msg(req)
+        self.logger.info("Group ID %d installed on switch %d", group_id, datapath.id)
 
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def _packet_in_handler(self, ev):
-        self.logger.info('Packets inn plsssss')
+        # Only log PacketIn if not ARP
+
         # If you hit this you might want to increase
         # the "miss_send_length" of your switch
         if ev.msg.msg_len < ev.msg.total_len:
@@ -139,23 +139,31 @@ class SimpleSwitch13(app_manager.RyuApp):
         pkt = packet.Packet(msg.data)
         eth = pkt.get_protocols(ethernet.ethernet)[0]
 
+        # if eth.dst.startswith('33:33'):
+        #     # Ignore IPv6 multicast packets
+        #     return
+
+        # if eth.ethertype == ether_types.ETH_TYPE_LLDP:
+        #     # ignore lldp packet
+        #     return
+
         arp_pkt = pkt.get_protocol(arp.arp)
+
+        if not arp_pkt:
+            self.logger.info('Packets inn plsssss')
+
         if arp_pkt:
             self.logger.info("Received ARP: %s -> %s", arp_pkt.src_ip, arp_pkt.dst_ip)
+            match = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_ARP)
             actions = [parser.OFPActionOutput(ofproto.OFPP_FLOOD)]
+            self.add_flow(datapath, hard_timeout=0, priority=1, match=match, actions=actions)
+
             data = msg.data if msg.buffer_id == ofproto.OFP_NO_BUFFER else None
             out = parser.OFPPacketOut(datapath=datapath, buffer_id=msg.buffer_id,
                                       in_port=in_port, actions=actions, data=data)
             datapath.send_msg(out)
             return
 
-        if eth.dst.startswith('33:33'):
-            # Ignore IPv6 multicast packets
-            return
-
-        if eth.ethertype == ether_types.ETH_TYPE_LLDP:
-            # ignore lldp packet
-            return
         dst = eth.dst
         src = eth.src
         out_port = None
@@ -176,17 +184,7 @@ class SimpleSwitch13(app_manager.RyuApp):
                 if dst in self.mac_to_port[dpid]:
                     # Destination MAC is known (intra-leaf or learned)
                     out_port = self.mac_to_port[dpid][dst]
-
-                    if in_port in [3, 4] and out_port in [1, 2]:
-                        # inter-leaf → ECMP
-                        actions = [parser.OFPActionGroup(group_id=50)]
-                    elif in_port in [3, 4] and out_port in [3, 4]:
-                        # intra-leaf → direct
-                        actions = [parser.OFPActionOutput(out_port)]
-                    else:
-                        # Unexpected port, fallback (optional)
-                        actions = [parser.OFPActionOutput(ofproto.OFPP_FLOOD)]
-
+                    actions = [parser.OFPActionOutput(out_port)]
                     match = parser.OFPMatch(in_port=in_port, eth_dst=dst, eth_src=src)
                     self.add_flow(datapath, 1000, 3, match, actions)
                     data = None
@@ -195,32 +193,53 @@ class SimpleSwitch13(app_manager.RyuApp):
                     out = parser.OFPPacketOut(datapath=datapath, buffer_id=msg.buffer_id,
                                               in_port=in_port, actions=actions, data=data)
                     datapath.send_msg(out)
-
                 else:
                     # Destination MAC not known, flood to the other host port AND both spine ports (no flow install)
-                    actions = []
-                    if in_port == 3:
-                        actions = [parser.OFPActionOutput(4)]
-                    elif in_port == 4:
-                        actions = [parser.OFPActionOutput(3)]
-                    # Always add spine ports for inter-leaf reachability
-                    # actions += [parser.OFPActionOutput(1), parser.OFPActionOutput(2)]
+                    tx_bytes_1 = self.tx_byte_int.get(dpid, {}).get(1, None)
+                    tx_bytes_2 = self.tx_byte_int.get(dpid, {}).get(2, None)
+
+                    if tx_bytes_1 is not None and tx_bytes_2 is not None:
+                        if tx_bytes_2 < tx_bytes_1:
+                            out_port = 2
+                        else:
+                            out_port = 1
+                            self.logger.info(
+                                "Adaptive ECMP: Port stats ready. TX Bytes: port1=%d, port2=%d → Selected port %d",
+                                tx_bytes_1, tx_bytes_2, out_port
+                            )
+                    else:
+                        out_port = 1  # Fallback to port 1 until stats are ready
+                        self.logger.warning("Adaptive ECMP: Port stats NOT ready, falling back to port 1")
+
+                    # Log port selection decision
+                    self.logger.info("Adaptive ECMP selected port %d at leaf %s", out_port, dpid)
+
+                    # Actions and flow install
+                    # Use group action for unknown destination MAC
+                    group_id = 50
+                    actions = [parser.OFPActionGroup(group_id)]
                     match = parser.OFPMatch(in_port=in_port, eth_dst=dst)
-                    actions.append(parser.OFPActionGroup(group_id=50))
-                    self.add_flow(datapath, 0, 1, match, actions)
+
+                    self.add_flow(datapath, 0, 3, match, actions)
+
                     data = None
                     if msg.buffer_id == ofproto.OFP_NO_BUFFER:
                         data = msg.data
+
                     out = parser.OFPPacketOut(datapath=datapath, buffer_id=msg.buffer_id,
                                               in_port=in_port, actions=actions, data=data)
                     datapath.send_msg(out)
+
+                    self.logger.info("Group flow installed for dst %s on leaf %d via group %d", dst, dpid, group_id)
+
             elif in_port in [1, 2]:
                 # Packet from spine port
                 if dst in self.mac_to_port[dpid]:
                     out_port = self.mac_to_port[dpid][dst]
                     actions = [parser.OFPActionOutput(out_port)]
                     match = parser.OFPMatch(in_port=in_port, eth_dst=dst, eth_src=src)
-                    self.add_flow(datapath, 0, 1, match, actions)
+                    self.add_flow(datapath, 0, 3, match, actions)
+
                     data = None
                     if msg.buffer_id == ofproto.OFP_NO_BUFFER:
                         data = msg.data
@@ -263,6 +282,7 @@ class SimpleSwitch13(app_manager.RyuApp):
                     return
                 else:
                     self.add_flow(datapath, 0, 3, match, actions)
+
             data = None
             if msg.buffer_id == ofproto.OFP_NO_BUFFER:
                 data = msg.data
@@ -296,11 +316,14 @@ class SimpleSwitch13(app_manager.RyuApp):
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
 
-        # req = parser.OFPFlowStatsRequest(datapath)
-        # datapath.send_msg(req)
+        req = parser.OFPFlowStatsRequest(datapath)
+        datapath.send_msg(req)
 
         req = parser.OFPPortStatsRequest(datapath, 0, ofproto.OFPP_ANY)
         datapath.send_msg(req)
+
+        req_group = parser.OFPGroupStatsRequest(datapath, 0, ofproto.OFPG_ALL)
+        datapath.send_msg(req_group)
 
     @set_ev_cls(ofp_event.EventOFPFlowStatsReply, MAIN_DISPATCHER)
     def _flow_stats_reply_handler(self, ev):
@@ -316,13 +339,20 @@ class SimpleSwitch13(app_manager.RyuApp):
                              '-------- ----------------- '
                              '-------- -------- --------')
             for stat in sorted([flow for flow in body if flow.priority == 1],
-                               key=lambda flow: (flow.match['in_port'],
-                                                 flow.match['eth_dst'])):
+                               key=lambda flow: (
+                               flow.match.get('in_port', -1), flow.match.get('eth_dst', '00:00:00:00:00:00'))
+                               ):
                 self.logger.info('%016x %8x %17s %8x %8d %8d',
                                  ev.msg.datapath.id,
-                                 stat.match['in_port'], stat.match['eth_dst'],
+                                 stat.match.get('in_port', -1), stat.match.get('eth_dst', '00:00:00:00:00:00'),
                                  stat.instructions[0].actions[0].port,
                                  stat.packet_count, stat.byte_count)
+
+            for stat in ev.msg.body:
+                self.logger.info("Group ID: %d", stat.group_id)
+                self.logger.info("  Ref count: %d", stat.ref_count)
+                self.logger.info("  Packet Count: %d", stat.packet_count)
+                self.logger.info("  Byte Count: %d", stat.byte_count)
 
     @set_ev_cls(ofp_event.EventOFPPortStatsReply, MAIN_DISPATCHER)
     def _port_stats_reply_handler(self, ev):

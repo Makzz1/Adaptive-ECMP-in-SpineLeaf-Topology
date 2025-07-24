@@ -12,5 +12,5 @@ sleep 5
 echo "[INFO] Launching Mininet..."
 mn --custom /opt/topo/spine_leaf_topology.py \
    --topo spine_leaf \
-   --controller=remote,ip=172.31.0.2 \
+   --controller=remote,ip=172.31.0.2,port=6633 \
    --switch=ovs,protocols=OpenFlow13

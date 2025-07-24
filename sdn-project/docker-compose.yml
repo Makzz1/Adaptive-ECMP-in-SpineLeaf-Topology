@@ -9,7 +9,8 @@ services:
     networks:
       sdn_net:
         ipv4_address: 172.31.0.2
-
+    ports:
+        - "6633:6633"
   mininet:
     build:
       context: .
